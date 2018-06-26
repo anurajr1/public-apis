@@ -16,8 +16,13 @@ index_auth = 2
 index_https = 3
 index_cors = 4
 index_link = 5
+num_segments = 6
 
 errors = []
+title_links = []
+previous_links = []
+anchor_re = re.compile(anchor + '\s(.+)')
+section_title_re = re.compile('\*\s\[(.*)\]')
 
 
 def add_error(line_num, message):
@@ -63,11 +68,16 @@ def check_entry(line_num, segments):
     char = segments[index_desc][-1]
     if char in punctuation:
         add_error(line_num, "description should not end with {}".format(char))
+    desc_length = len(segments[index_desc])
+    if desc_length > 100:
+        add_error(line_num, "description should not exceed 100 characters (currently {})".format(desc_length))
     # END Description
     # START Auth
     # values should conform to valid options only
-    auth = segments[index_auth].replace('`', '')
-    if auth not in auth_keys:
+    auth = segments[index_auth]
+    if auth != 'No' and (not auth.startswith('`') or not auth.endswith('`')):
+        add_error(line_num, "auth value is not enclosed with `backticks`")
+    if auth.replace('`', '') not in auth_keys:
         add_error(line_num, "{} is not a valid Auth option".format(auth))
     # END Auth
     # START HTTPS
@@ -87,6 +97,10 @@ def check_entry(line_num, segments):
     link = segments[index_link]
     if not link.startswith('[Go!](http') or not link.endswith(')'):
         add_error(line_num, 'link syntax should be "[Go!](LINK)"')
+    if link in previous_links:
+        add_error(line_num, 'duplicate link - entries should only be included in one section')
+    else:
+        previous_links.append(link)
     # END Link
 
 
@@ -102,11 +116,16 @@ def check_format(filename):
     num_in_category = min_entries_per_section + 1
     category = ""
     category_line = 0
-    anchor_re = re.compile('###\s\S+')
     for line_num, line in enumerate(lines):
+        if section_title_re.match(line):
+            title_links.append(section_title_re.match(line).group(1))
         # check each section for the minimum number of entries
         if line.startswith(anchor):
-            if not anchor_re.match(line):
+            match = anchor_re.match(line)
+            if match:
+                if match.group(1) not in title_links:
+                    add_error(line_num, "section header ({}) not added as a title link".format(match.group(1)))
+            else:
                 add_error(line_num, "section header is not formatted correctly")
             if num_in_category < min_entries_per_section:
                 add_error(category_line, "{} section does not have the minimum {} entries (only has {})".format(
@@ -115,10 +134,15 @@ def check_format(filename):
             category_line = line_num
             num_in_category = 0
             continue
+        # skips lines that we do not care about
         if not line.startswith('|') or line.startswith('|---'):
             continue
         num_in_category += 1
         segments = line.split('|')[1:-1]
+        if len(segments) < num_segments:
+            add_error(line_num, "entry does not have all the required sections (have {}, need {})".format(
+                len(segments), num_segments))
+            continue
         # START Global
         for segment in segments:
             # every line segment should start and end with exactly 1 space
@@ -131,11 +155,9 @@ def check_format(filename):
 
 
 def main():
-    num_args = len(sys.argv)
-    if num_args < 2:
+    if len(sys.argv) < 2:
         print("No file passed (file should contain Markdown table syntax)")
         sys.exit(1)
-
     check_format(sys.argv[1])
     if len(errors) > 0:
         for err in errors:
